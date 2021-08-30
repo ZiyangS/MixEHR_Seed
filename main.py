@@ -3,6 +3,10 @@ import logging
 import numpy as np
 import os
 import sys
+import json
+from corpus import Corpus
+from GDTM_AEVI import GDTM
+
 
 logger = logging.getLogger("GDTM training processing")
 parser = argparse.ArgumentParser()
@@ -17,8 +21,10 @@ parser.add_argument("-every", "--save_every", help="Store model every X number o
 
 def run(args):
     cmd = args.cmd
-    # corpus = Corpus.read_corpus_from_directory(args.corpus)
-    # gdtm = GDTM(int(args.num_topics), corpus, args.output)
+    corpus = Corpus.read_corpus_from_directory(args.corpus)
+    with open('phecode_mapping\phecode3_icd_dict.json') as f:
+        topic_seeds_dict = json.load(f) # we should map word by BOWs
+    gdtm = GDTM(int(args.num_topics), corpus, topic_seeds_dict, args.output)
     # logger.info('''
     #     ======= Parameters =======
     #     mode: \t\ttraining
