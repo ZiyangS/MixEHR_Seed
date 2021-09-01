@@ -32,10 +32,10 @@ parser.add_argument('output', help='Directory where processed data will be store
 
 
 class Corpus(Dataset):
-    def __init__(self, patients, T, V) -> NoReturn:
+    def __init__(self, docs, T, V) -> NoReturn:
         logger.info("Creating corpus...")
-        self.dataset = patients
-        self.D = len(patients)
+        self.dataset = docs # a list of Document objects
+        self.D = len(docs)
         self.T = T
         self.V = V
 
@@ -91,7 +91,7 @@ class Corpus(Dataset):
                     row = row[1]
                     doc_id = row['doc_id']
                     pat_id = row['pat_id']
-                    if doc_id not in doc_ids: #?
+                    if doc_id not in doc_ids:
                         continue
                     word_id = vocab_ids[row['dx']]
                     freq = row['freq']
@@ -238,7 +238,7 @@ class Corpus(Dataset):
     class Document(object):
         def __init__(self, doc_id, pat_id, t: int, words_dict: dict = None):
             '''
-            Create a new patient.
+            Create a new document.
             '''
             self.words_dict = words_dict if words_dict is not None else {} # key: word_id, value: frequency
             self.doc_id = doc_id # index the order of document,  doc_id for train set and test set starts from 0

@@ -9,11 +9,12 @@ import pickle
 from corpus import Corpus
 import math
 import torch
+from torch import nn, optim
 import torch.nn.functional as F
-from torch import nn
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class GDTM():
+class GDTM(nn.Module):
     def __init__(self, K, corpus:Corpus, topic_seeds_dict: dict, out='./store/'):
         """
         Arguments:
@@ -22,6 +23,7 @@ class GDTM():
             actually it could be D X V matrix, each document represents as a count in vacob
             topic_seeds_dict: it indicates the seed words for each topic
         """
+        super(GDTM, self).__init__()
         self.out = out  # folder to save experiments
 
         # self.C = corpus.C
@@ -36,6 +38,10 @@ class GDTM():
         self.S = [0] * self.K # the size of seed words for each topic
         for k, key in enumerate(self.topic_seeds_dict):
             self.S[k] = len(self.topic_seeds_dict[key])
+
+        self.eta = np.random.rand(self.T, self.K)
+        self.alpha_act = nn.Softplus() # Softplus (smoothReLu)
+        self.alpha = self.alpha_act(self.eta)
 
         self.beta = 0.5 # hyperparameter for prior of\phi_r
         self.beta_sum = self.beta * self.V
@@ -78,38 +84,40 @@ class GDTM():
         self.eta_hidden_size = 200 # number of hidden units for rnn
         self.rho_size = 300 # dimension of rho
         self.emb_size =300 #dimension of embeddings
-
-        theta_act= "softplus"
         self.enc_drop = 0.0 # dropout rate on encoder
         self.eta_nlayers = 3 # number of layers for eta
-        self.t_drop = nn.Dropout(self.enc_drop)
+        self.t_drop = nn.Dropout(self.enc_drop) # dropout Layers
         self.delta = 0.005  # prior variance
         # self.train_embeddings = args.train_embeddings
-        self.theta_act = nn.Softplus() # softplus or smoothReLu
 
         self.q_eta_map = nn.Linear(self.V, self.eta_hidden_size)
         self.q_eta = nn.LSTM(self.eta_hidden_size, self.eta_hidden_size, self.eta_nlayers, dropout=self.enc_drop)
         self.mu_q_eta = nn.Linear(self.eta_hidden_size+self.K, self.K, bias=True)
         self.logsigma_q_eta  = nn.Linear(self.eta_hidden_size+self.K, self.K, bias=True)
 
-        # Model parameters
-        self.tune_model_parameter =  ['pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
-        self.parameters = ['mu', 'beta', 'pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
+        # optimizer
+        self.lr = 0.005
+        self.wdecay = 1.2e-6
+        self.optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wdecay)
 
-    def ELBO(self):
+        # Model parameters
+        # self.tune_model_parameter =  ['pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
+        # self.parameters = ['mu', 'beta', 'pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
+
+    def compute_elbo(self):
+        '''
+        compute the elbo excluding eta, kl with respect to eta is computed seperately after estimation by neural network
+        '''
         eps = np.finfo(float).eps
-        ELBO = None
-        # E_q[log p(alpha)]
+        elbo_z = None
         # E_q[log p(z | alpha)] -
         # E_q[log p(w | z, beta, mu, pi)]
         # - E_q[log q(z | gamma)]
-        # - E_q[log q(alpha)]
-        return ELBO
-
+        return elbo_z
 
     def reparameterize(self, mu, logvar):
         """
-        Returns a sample from a Gaussian distribution via reparameterization.
+        Returns a sample from a Gaussian distribution via reparameterization
         """
         if self.training:
             std = torch.exp(0.5 * logvar)
@@ -118,46 +126,58 @@ class GDTM():
         else:
             return mu
 
-
     def get_kl_eta(self, q_mu, q_logsigma, p_mu=None, p_logsigma=None):
         """
         Returns KL( N(q_mu, q_logsigma) || N(p_mu, p_logsigma) ).
         """
-        if p_mu is not None and p_logsigma is not None:
+        if p_mu is not None and p_logsigma is not None: # compute kl divergence for eta_{1:t-1}
             sigma_q_sq = torch.exp(q_logsigma)
             sigma_p_sq = torch.exp(p_logsigma)
-            kl = ( sigma_q_sq + (q_mu - p_mu)**2 ) / ( sigma_p_sq + 1e-6 )
+            kl = (sigma_q_sq + (q_mu - p_mu)**2 ) / ( sigma_p_sq + 1e-6 )
             kl = kl - 1 + p_logsigma - q_logsigma
             kl = 0.5 * torch.sum(kl, dim=-1)
-        else:
+        else: # compute kl divergence for eta_0
             kl = -0.5 * torch.sum(1 + q_logsigma - q_mu.pow(2) - q_logsigma.exp(), dim=-1)
         return kl
 
+    def init_hidden(self):
+        """
+        Initializes the first hidden state of the RNN used as inference network for \eta.
+        """
+        weight = next(self.parameters())
+        nlayers = self.eta_nlayers
+        nhid = self.eta_hidden_size
+        return (weight.new_zeros(nlayers, 1, nhid), weight.new_zeros(nlayers, 1, nhid)) # (h0, c0)
 
-    def get_eta(self, rnn_inp): ## structured amortized inference
-        inp = self.q_eta_map(rnn_inp).unsqueeze(1)
-        hidden = self.init_hidden()
+    def get_eta(self, rnn_inp):
+        '''
+        structured amortized inference for eta
+        eta is T x K matrix, each eta_t is estimated given eta{1:t-1} (eta{t-1})
+        eta_t thus is modeled by neural network with concatenated input of rnn_input and eta_{t-1}
+        '''
+        inp = self.q_eta_map(rnn_inp).unsqueeze(1) # q_eta_map: T x V -> T x eta_hidden_size -> T x 1 x eta_hidden_size
+        hidden = self.init_hidden() #
         output, _ = self.q_eta(inp, hidden)
-        output = output.squeeze()
+        output = output.squeeze() # output is T x eta_hidden_size
+        # why we need to compute output not just used rnn_input
 
         etas = torch.zeros(self.T, self.K).to(device)
         kl_eta = []
-
-        inp_0 = torch.cat([output[0], torch.zeros(self.K,).to(device)], dim=0)
+        # get eta_0 and kl(eta_0) initially as eta_t is dependent on eta_{t-1}
+        inp_0 = torch.cat([output[0], torch.zeros(self.K,).to(device)], dim=0) # zero K-len vector is non-exist eta_{t-1} for eta_0
         mu_0 = self.mu_q_eta(inp_0)
         logsigma_0 = self.logsigma_q_eta(inp_0)
         etas[0] = self.reparameterize(mu_0, logsigma_0)
-
         p_mu_0 = torch.zeros(self.K,).to(device)
         logsigma_p_0 = torch.zeros(self.K,).to(device)
         kl_0 = self.get_kl_eta(mu_0, logsigma_0, p_mu_0, logsigma_p_0)
         kl_eta.append(kl_0)
+        # get eta_{1:T} given initial eta_0
         for t in range(1, self.T):
-            inp_t = torch.cat([output[t], etas[t-1]], dim=0)
+            inp_t = torch.cat([output[t], etas[t-1]], dim=0) # normalized_input(why we need to use output?) + eta_{t-1}
             mu_t = self.mu_q_eta(inp_t)
             logsigma_t = self.logsigma_q_eta(inp_t)
             etas[t] = self.reparameterize(mu_t, logsigma_t)
-
             p_mu_t = etas[t-1]
             logsigma_p_t = torch.log(self.delta * torch.ones(self.K,).to(device))
             kl_t = self.get_kl_eta(mu_t, logsigma_t, p_mu_t, logsigma_p_t)
@@ -165,8 +185,13 @@ class GDTM():
         kl_eta = torch.stack(kl_eta).sum()
         return etas, kl_eta
 
+    def eta_exp(self, eta):
+        '''
+        compute the expected terms related to eta
+        '''
+        self.alpha = self.alpha_act(eta)
 
-    def CVB0(self, docs, rnn_input):
+    def CVB0(self, docs):
         temp_exp_m = np.zeros((self.D, self.K))
         temp_exp_n = np.zeros((self.V, self.K))
         temp_exp_s = np.zeros((self.V, self.K))
@@ -179,7 +204,7 @@ class GDTM():
             temp_gamma_ss = np.zeros((len(doc.words_dict), self.K)) # non-seed regular word will be zero
             for w_idx, counts in enumerate(doc.words_dict.items()): # w_idx is the index of word in each document
                 w_i, freq = counts # w_i represents the index of word in vocabulary
-                for k in range(K): # update gamma_dik
+                for k in range(self.K): # update gamma_dik
                     # todo: we could update K topics at same time? because we need to check [z_di = k] it is difficult
                     if w_i not in self.topic_seeds_dict[k]:   # regular word, must be regular topic
                         temp_gamma_rr[w_idx, k] = (self.alpha[t_d, k] + self.exp_m[doc.doc_id, k])\
@@ -214,9 +239,46 @@ class GDTM():
         # for k in range(K):
         #     self.gamma[:,:,k] = (1-self.pi[k]) * self.gamma_r[:,:,k] + self.pi[k] * self.gamma_s[:,:,k]
         self.update_hyperparams() # update hyperparameters
-        # update eta
-        eta, kl_eta = self.get_eta(rnn_input) # change to rnn_inp
-        return eta, kl_eta
+        elbo_z = self.compute_elbo()
+        return elbo_z
+
+    def update_hyperparams(self):
+        '''
+        update hyperparameters \pi
+        '''
+        gamma_s_sum = np.zeros(self.K)
+        gamma_r_sum = np.zeros(self.K)
+        for d in range(self.D):
+            gamma_s_sum += self.gamma_s[d].sum(axis=0) # k vector
+            gamma_r_sum += self.gamma_r[d].sum(axis=0)
+        self.pi = gamma_s_sum / (gamma_r_sum + gamma_s_sum)
+
+    def inference_svb(self, args, max_epoch=1000, save_every=100):
+        elbo = [0,]
+        for epoch in range(0, max_epoch):
+            print("Training for epoch", epoch)
+            for i, d in enumerate(self.generator): # for each epoach, we sample mini_batch data once
+                print("Running for", i)
+                batch_docs, batch_indices, batch_times = d # check the data type
+                rnn_input = self.get_rnn_input(batch_docs, batch_times) # get input for LSTM/transformer
+                # maybe rnn_input should be normalized as DETM paper
+                start_time = time.time()
+                elbo_z = self.CVB0(batch_docs)
+                # update eta via LSTM/Transformer network by gradient descent
+                self.optimizer.zero_grad()
+                self.zero_grad()
+                self.eta, kl_eta = self.get_eta(rnn_input)  # change to rnn_inp
+                self.eta_exp(self.eta)
+                loss = kl_eta + elbo_z # here is a problem, maybe only kl_eta need to be differentiated
+                loss.backward()
+                if self.clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), args.clip)
+                self.optimizer.step()
+                print("\t took %s seconds" % (time.time() - start_time))
+                elbo.append(loss)
+                print("epoch %s: elbo %s, diff %s "% (epoch, elbo[-1], np.abs(elbo[-1] - elbo[-2])))
+                if epoch % save_every == 0:
+                    self.save_model(epoch)
 
     def get_rnn_input(self, docs, times):
         rnn_input = torch.zeros(self.T, self.V).to(device)
@@ -235,51 +297,19 @@ class GDTM():
         rnn_input = rnn_input / cnt.unsqueeze(1) # T vector to T x 1, (T x V) / (T x 1), normalize
         return rnn_input
 
-    def inference_svb(self, max_iter=500, save_every=100):
-        elbo = [0, ]
-        iter = 1
-        for i, d in enumerate(self.generator):
-            batch_docs, batch_i, batch_times = d
-            self.gamma = {doc.doc_id: np.random.rand(len(doc.words_dict), self.K) for doc in batch_docs}
-        while iter <= max_iter:
-            for i, d in enumerate(self.generator):
-                batch_docs, batch_i, batch_times = d
-                rnn_input = self.get_rnn_input(batch_docs, batch_times)
-                start_time = time.time()
-                self.CVB0(batch_docs, rnn_input)
-                print("\t took %s seconds" % (time.time() - start_time))
-                elbo.append(self.ELBO())
-                print("%s elbo %s diff %s "%(iter , elbo[-1], np.abs(elbo[-1] - elbo[-2])))
-                if iter % save_every == 0:
-                    self.save_model(iter)
-                iter += 1
-                if not iter <= max_iter:
-                    break
-
-    def update_hyperparams(self):
-        '''
-        update hyperparameters \pi and others
-        '''
-        gamma_s_sum = np.zeros(self.K)
-        gamma_r_sum = np.zeros(self.K)
-        for d in range(self.D):
-            gamma_s_sum += self.gamma_s[d].sum(axis=0) # k vector
-            gamma_r_sum += self.gamma_r[d].sum(axis=0)
-        self.pi = gamma_s_sum / (gamma_r_sum + gamma_s_sum)
-
-    def save_model(self, iter):
-        with h5py.File(os.path.join(self.out, 'model_gdtm_k%s_iter%s.hdf5' % (self.K, iter)), 'w') as hf:
-            for param in self.parameters:
-                if param == 'gamma':
-                    pass
-                else:
-                    hf.create_dataset(param, data=self.__getattribute__(param))
+    # def save_model(self, iter):
+    #     with h5py.File(os.path.join(self.out, 'model_gdtm_k%s_iter%s.hdf5' % (self.K, iter)), 'w') as hf:
+    #         for param in self.parameters:
+    #             if param == 'gamma':
+    #                 pass
+    #             else:
+    #                 hf.create_dataset(param, data=self.__getattribute__(param))
 
 
+# if __name__ == '__main__':
+#     import json
+#     with open('./phecode_mapping/phecode3_icd_dict.json') as f:
+#         topic_seeds_dict = json.load(f) # we should map word by BOWs
+#     gdtm = GDTM(100, './corpus', topic_seeds_dict, './result/')
+#     gdtm.inference_svb(max_iter=1000, save_every=50)
 
-if __name__ == '__main__':
-    c_train = Corpus.read_corpus_from_directory("../dataset/cv1/train")
-    c_test = Corpus.read_corpus_from_directory("../dataset/cv1/test")
-    K = 50
-    gdtm = GDTM(K, c_train)
-    # gdtm.inference_svb(max_iter=500, save_every=100)

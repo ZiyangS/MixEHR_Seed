@@ -7,6 +7,10 @@ import json
 from corpus import Corpus
 from GDTM_AEVI import GDTM
 
+import torch
+from torch import nn, optim
+from torch.nn import functional as F
+
 
 logger = logging.getLogger("GDTM training processing")
 parser = argparse.ArgumentParser()
@@ -18,6 +22,14 @@ parser.add_argument("-iter", "--max_iter", help="Maximum number of iterations (D
 parser.add_argument("-every", "--save_every", help="Store model every X number of iterations (Default 50)",
                             type=int, default=50)
 
+# arguments for pytorch
+parser.add_argument('--lr', type=float, default=0.005, help='learning rate')
+parser.add_argument('--clip', type=float, default=0.0, help='gradient clipping')
+parser.add_argument('--wdecay', type=float, default=1.2e-6, help='some l2 regularization')
+
+# should use GPU here, printed result is "cuda"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
 
 def run(args):
     cmd = args.cmd
@@ -36,9 +48,9 @@ def run(args):
     #     ==========================
     # ''' % (args.corpus, args.output, args.num_topics, args.max_iter, args.save_every))
     #
-    # mixehr.inference_svb(max_iter=args.max_iter, save_every=args.save_every)
+    # gdtm.inference_svb(max_iter=args.max_iter, save_every=args.save_every)
 
 
-if __name__ == '__main__':
-    run(parser.parse_args(['100', './corpus', './store/', './result/']))
+# if __name__ == '__main__':
+#     run(parser.parse_args(['100', './corpus', './store/', './result/']))
 
