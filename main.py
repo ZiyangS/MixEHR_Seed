@@ -3,22 +3,18 @@ import logging
 import numpy as np
 import os
 import sys
-import json
 from corpus import Corpus
-from GDTM_AEVI import GDTM
-
 import torch
-from torch import nn, optim
-from torch.nn import functional as F
-
+from GDTM_AEVI import GDTM
+from utils import tokenize_phecode_icd
 
 logger = logging.getLogger("GDTM training processing")
 parser = argparse.ArgumentParser()
 # default arguments
-parser.add_argument('num_topics', help='Number of topics')
+parser.add_argument('num_topics', help='Number of topics') # it will not be useful as we use phecode to guide topic modelling
 parser.add_argument('corpus', help='Path to read corpus file', default='./store/')
 parser.add_argument('output', help='Directory to store model', default='./result/')
-parser.add_argument("-iter", "--max_iter", help="Maximum number of iterations (Default 500)", type=int, default=500)
+parser.add_argument("-epoch", "--max_epoch", help="Maximum number of iterations (Default 500)", type=int, default=500)
 parser.add_argument("-every", "--save_every", help="Store model every X number of iterations (Default 50)",
                             type=int, default=50)
 
@@ -32,11 +28,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 def run(args):
-    cmd = args.cmd
+    print(args)
+    # cmd = args.cmd
     corpus = Corpus.read_corpus_from_directory(args.corpus)
-    with open('phecode_mapping\phecode3_icd_dict.json') as f:
-        topic_seeds_dict = json.load(f) # we should map word by BOWs
-    gdtm = GDTM(int(args.num_topics), corpus, topic_seeds_dict, args.output)
+
+    phecode_ids, vocab_ids, tokenized_phecode_icd = tokenize_phecode_icd()
+    # phecode_ids: key is phecode, value is the mapped index of phecode from 1 to K-1
+    # vocab_ids: key is icd, value is the mapped index of icd from 1 to V-1
+    # tokenized_phecode_icd: key is mapped phecode index, value is mapped icd code index
+
+    gdtm = GDTM(len(tokenized_phecode_icd), corpus, tokenized_phecode_icd, args.output)
+    gdtm = gdtm.to(device)
     # logger.info('''
     #     ======= Parameters =======
     #     mode: \t\ttraining
@@ -47,10 +49,8 @@ def run(args):
     #     save every:\t\t%s
     #     ==========================
     # ''' % (args.corpus, args.output, args.num_topics, args.max_iter, args.save_every))
-    #
-    # gdtm.inference_svb(max_iter=args.max_iter, save_every=args.save_every)
+    gdtm.inference_SCVB_AEVI(args, max_epoch=args.max_epoch, save_every=args.save_every)
 
-
-# if __name__ == '__main__':
-#     run(parser.parse_args(['100', './corpus', './store/', './result/']))
+if __name__ == '__main__':
+    run(parser.parse_args(['100', './store/', './result/']))
 
