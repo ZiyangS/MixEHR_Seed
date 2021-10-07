@@ -3,7 +3,7 @@ import re
 import time
 import h5py
 import numpy as np
-from scipy.special import gamma, loggamma, gammaln, digamma
+from scipy.special import gamma, gammaln, digamma, logsumexp
 from scipy.stats import norm
 import pickle
 from corpus import Corpus
@@ -62,24 +62,28 @@ class GDTM(nn.Module):
         self.exp_m = np.random.rand(self.D, self.K)
         self.exp_n = np.random.rand(self.V, self.K)
         self.exp_s = np.random.rand(self.V, self.K) # use V to represent, regular word will be 0
-
+        self.exp_q_z = 0
         self.eta = torch.rand(self.T, self.K)
-        self.alpha = self.alpha_softplus_act(self.eta, comp_met="init")
+        self.alpha = self.alpha_softplus_act()
         self.alpha = self.alpha.detach().cpu().numpy() # T x K
 
         # variational distribution for eta via amortizartion, eta is T x K matrix
         self.eta_hidden_size = 200 # number of hidden units for rnn
         self.eta_dropout = 0.0 # dropout rate on rnn for eta
         self.eta_nlayers = 3 # number of layers for eta
-        self.delta = 0.005  # prior variance
+        self.delta = 0.01  # prior variance
         self.q_eta_map = nn.Linear(self.V, self.eta_hidden_size)
         self.q_eta = nn.LSTM(self.eta_hidden_size, self.eta_hidden_size, self.eta_nlayers, dropout=self.eta_dropout)
         self.mu_q_eta = nn.Linear(self.eta_hidden_size+self.K, self.K, bias=True)
         self.logsigma_q_eta  = nn.Linear(self.eta_hidden_size+self.K, self.K, bias=True)
         # optimizer
-        self.lr = 0.005
+        self.clip = 0.1
+        # self.lr = 0.0005
+        self.lr = 0.001
         self.wdecay = 1.2e-6
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wdecay)
+        self.max_logsigma_t = 5.0 #avoid the value to be too big
+        self.min_logsigma_t = -5.0
         # save model parameters
         # self.tune_model_parameter =  ['pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
         # self.parameters = ['mu', 'beta', 'pi', 'gamma', 'exp_m', 'exp_n', 'exp_s']
@@ -117,31 +121,32 @@ class GDTM(nn.Module):
                             self.gamma_rr[doc.doc_id][w_i][k] += (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) \
                                 * (self.exp_n[word_id][k] + self.beta) / (self.exp_n_sum[k] + self.beta_sum)
 
-
-    def compute_elbo(self):
+    def get_kl_z_x(self, batch_times):
         '''
         compute the elbo excluding eta, kl with respect to eta is computed seperately after estimation by neural network
         '''
         eps = np.finfo(float).eps
-        elbo = 0
-        # # E_q[log p(z | alpha)], self.alpha[self.doc_t_labels] is a D x K matrix
-        # elbo_p_z = gammaln(np.sum(self.alpha[self.doc_t_labels], axis=1)) - np.sum(gammaln(self.alpha[self.doc_t_labels]), axis=1) + \
-        #         np.sum(gammaln(self.alpha[self.doc_t_labels] + self.exp_m), axis=1) - \
-        #         gammaln(np.sum(self.alpha[self.doc_t_labels] + self.exp_m, axis=1))
-        # elbo += np.sum(elbo_p_z)
-        # # E_q[log p(w | z, beta, mu, pi)], check overflow issue
-        # # here is problem, what is S
-        # elbo_w_z = [gamma(self.beta_sum) / np.power(gamma(self.beta), self.V) \
-        #             * np.prod(gamma(self.exp_n[:, k]+self.beta) * np.power(1-self.pi[k], self.exp_n[:, k])) \
-        #             / gamma(self.exp_n_sum[k] + self.beta_sum) + \
-        #             gamma(self.mu_sum) / np.power(gamma(self.beta), self.S) \
-        #             * np.prod(gamma(self.exp_s[:, k] + self.mu) * np.power(self.pi[k], self.exp_s[:, k])) \
-        #             / gamma(self.exp_s_sum[k] + self.mu_sum)
-        #             for k in range(self.K)]
-        # elbo += np.log(elbo_w_z)
-        # # - E_q[log q(z | gamma)]
-        # elbo -= self.exp_q_z
-        return elbo
+        kl = 0
+        log_sum_n_terms, log_sum_s_terms = 0, 0
+        alpha = nn.Softplus(self.eta)
+        # E_q[log p(z | alpha)], alpha is T x K matrix
+        # p_z = gammaln(np.sum(self.alpha[batch_times], axis=1)) - np.sum(gammaln(self.alpha[batch_times]), axis=1) + \
+        #         np.sum(gammaln(self.alpha[batch_times] + self.exp_m), axis=1) - \
+        #         gammaln(np.sum(self.alpha[batch_times], axis=1) + self.exp_m_sum)
+        # kl += np.sum(p_z)
+        # E_q[log p(w | z, beta, mu, pi)], overflow
+        # for k in range(self.K):
+        #     log_sum_n_terms = gammaln(self.beta_sum) - self.V*gammaln(self.beta) + \
+        #                 np.sum(gammaln(self.exp_n[:, k]+self.beta) + self.exp_n[:, k]*np.log(1-self.pi[k])) - \
+        #                 gammaln(self.exp_n_sum[k] + self.beta_sum)
+        #     log_sum_s_terms = gammaln(self.mu_sum[k]) - self.S[k]*gammaln(self.mu) + \
+        #                 np.sum(gammaln(self.exp_s[:, k]+self.mu) + self.exp_s[:, k]*np.log(self.pi[k])) - \
+        #                 gammaln(self.exp_s_sum[k] + self.mu_sum[k])
+        # print(logsumexp(a=log_sum_n_terms, b=log_sum_s_terms))
+        # kl += np.log(np.exp(log_sum_n_terms) + np.exp(log_sum_s_terms))
+        # - E_q[log q(z | gamma)]
+        # kl -= self.exp_q_z
+        return kl
 
     def reparameterize(self, mu, logvar):
         """
@@ -156,12 +161,12 @@ class GDTM(nn.Module):
 
     def get_kl_eta(self, q_mu, q_logsigma, p_mu=None, p_logsigma=None):
         """
-        Returns KL( N(q_mu, q_logsigma) || N(p_mu, p_logsigma) ).
+        Returns KL(N(q_mu, q_logsigma) || N(p_mu, p_logsigma))
         """
         if p_mu is not None and p_logsigma is not None: # compute kl divergence for eta_{1:t-1}
             sigma_q_sq = torch.exp(q_logsigma)
             sigma_p_sq = torch.exp(p_logsigma)
-            kl = (sigma_q_sq + (q_mu - p_mu)**2 ) / ( sigma_p_sq + 1e-6 )
+            kl = (sigma_q_sq + (q_mu - p_mu)**2) / (sigma_p_sq + 1e-6)
             kl = kl - 1 + p_logsigma - q_logsigma
             kl = 0.5 * torch.sum(kl, dim=-1)
         else: # compute kl divergence for eta_0
@@ -175,7 +180,7 @@ class GDTM(nn.Module):
         weight = next(self.parameters())
         nlayers = self.eta_nlayers
         nhid = self.eta_hidden_size
-        return (weight.new_zeros(nlayers, 1, nhid), weight.new_zeros(nlayers, 1, nhid)) # (h0, c0)
+        return (weight.new_zeros(nlayers, 1, nhid), weight.new_zeros(nlayers, 1, nhid)) # (h0, c0), h0 and c0 are 3 x 1 x 200
 
     def get_eta(self, rnn_inp):
         '''
@@ -183,28 +188,29 @@ class GDTM(nn.Module):
         eta is T x K matrix, each eta_t is estimated given eta{1:t-1} (i.e. eta{t-1})
         eta_t thus is modeled by neural network with concatenated input of rnn_input and eta_{t-1}
         '''
-        print(rnn_inp.get_device())
         inp = self.q_eta_map(rnn_inp).unsqueeze(1) # q_eta_map: T x V -> T x eta_hidden_size -> T x 1 x eta_hidden_size
         hidden = self.init_hidden()
         output, _ = self.q_eta(inp, hidden)
         output = output.squeeze() # output is T x eta_hidden_size
-
         etas = torch.zeros(self.T, self.K).to(device)
         kl_eta = []
-        # get eta_0 and kl(eta_0) initially as eta_t is dependent on eta_{t-1}
-        inp_0 = torch.cat([output[0], torch.zeros(self.K,).to(device)], dim=0) # zero K-len vector is non-exist eta_{t-1} for eta_0
+        # get eta_0 and kl(eta_0) initially, eta_0 depends on zeros as eta_t is dependent on eta_{t-1},
+        inp_0 = torch.cat([output[0], torch.zeros(self.K,).to(device)], dim=0) # we have k-len zero value vector because eta_{t-1} for eta_0 is not exist, size is eta_hidden_size (200) + topic size
         mu_0 = self.mu_q_eta(inp_0)
         logsigma_0 = self.logsigma_q_eta(inp_0)
         etas[0] = self.reparameterize(mu_0, logsigma_0)
         p_mu_0 = torch.zeros(self.K,).to(device)
         logsigma_p_0 = torch.zeros(self.K,).to(device)
-        kl_0 = self.get_kl_eta(mu_0, logsigma_0, p_mu_0, logsigma_p_0)
+        kl_0 = self.get_kl_eta(mu_0, logsigma_0, p_mu_0, logsigma_p_0) # equal to self.get_kl_eta(mu_0, logsigma_0).sum()
         kl_eta.append(kl_0)
-        # get eta_{1:T} given initial eta_0
-        for t in range(1, self.T):
+        for t in range(1, self.T): # get eta_{1:T} given previous eta_{t-1}
             inp_t = torch.cat([output[t], etas[t-1]], dim=0)
             mu_t = self.mu_q_eta(inp_t)
             logsigma_t = self.logsigma_q_eta(inp_t)
+            if (logsigma_t > self.max_logsigma_t).sum() > 0:
+                logsigma_t[logsigma_t > self.max_logsigma_t] = self.max_logsigma_t
+            elif (logsigma_t < self.min_logsigma_t).sum() > 0:
+                logsigma_t[logsigma_t < self.min_logsigma_t] = self.min_logsigma_t
             etas[t] = self.reparameterize(mu_t, logsigma_t)
             p_mu_t = etas[t-1]
             logsigma_p_t = torch.log(self.delta * torch.ones(self.K,).to(device))
@@ -213,38 +219,13 @@ class GDTM(nn.Module):
         kl_eta = torch.stack(kl_eta).sum()
         return etas, kl_eta
 
-    def forward(self, rnn_input):
-        '''
-        receives input Tensors and produces output Tensors
-        '''
-        print('forward automatically running?')
-        self.etas, kl_eta = self.get_eta(rnn_input)  # change to rnn_inp
-        return kl_eta
-
-    def eta_exp(self, eta):
-        '''
-        compute the expected terms related to eta
-        '''
-        # self.alpha = np.log(1 + np.exp(eta))
-        pass
-
-    def alpha_softplus_act(self, eta, comp_met="infer"):
+    def alpha_softplus_act(self):
         '''
         compute alpha using eta with softplus function
         '''
-        print('test alpha')
-        print(eta)
-        # print(eta.item())
-        if comp_met == "infer":
-            print("infer")
-            self.alpha = nn.Softplus(eta)
-            print(self.alpha)
-        elif comp_met == "init":
-            print("init")
-            print(F.softplus(eta))
-            return F.softplus(eta)
+        return F.softplus(self.eta)
 
-    def CVB0(self, docs, indices, times, Cj):
+    def CVB0(self, docs, indices, times, C):
         temp_exp_m = np.zeros((self.D, self.K))
         temp_exp_n = np.zeros((self.V, self.K))
         temp_exp_s = np.zeros((self.V, self.K))
@@ -274,14 +255,17 @@ class GDTM(nn.Module):
                 # normalization
                 temp_gamma_s_sum = np.sum(temp_gamma_ss[w_i]) + np.sum(temp_gamma_sr[w_i])
                 temp_gamma_r_sum = np.sum(temp_gamma_rr[w_i])
-                temp_gamma_ss[w_i] /= temp_gamma_s_sum
-                temp_gamma_sr[w_i] /= temp_gamma_s_sum
-                temp_gamma_rr[w_i] /= temp_gamma_r_sum
+                # print(temp_gamma_s_sum, temp_gamma_r_sum)
+                temp_gamma_ss[w_i] /= temp_gamma_s_sum + 1e-6
+                temp_gamma_sr[w_i] /= temp_gamma_s_sum + 1e-6
+                temp_gamma_rr[w_i] /= temp_gamma_r_sum + 1e-6
                 # calculate frequency * gamma for each word, iterate words in documents
                 # temp_exp_m[d_i] += (self.pi*temp_gamma_ss[w_i] + (1-self.pi)*(temp_gamma_rr[w_i] + temp_gamma_sr[w_i])) * freq / 2
                 temp_exp_m[d_i] += (temp_gamma_ss[w_i] + temp_gamma_rr[w_i] + temp_gamma_sr[w_i]) * freq / 2
                 temp_exp_n[w_i] += (temp_gamma_rr[w_i] + temp_gamma_sr[w_i]) * freq
                 temp_exp_s[w_i] += temp_gamma_ss[w_i] * freq
+            temp_gamma = temp_gamma_ss + temp_gamma_sr + temp_gamma_rr
+            # self.exp_q_z += np.sum(temp_gamma * np.ma.log(temp_gamma).filled(0)) # used for update ELBO
             self.gamma_ss[doc.doc_id] = temp_gamma_ss
             self.gamma_sr[doc.doc_id] = temp_gamma_sr
             self.gamma_rr[doc.doc_id] = temp_gamma_rr
@@ -294,8 +278,6 @@ class GDTM(nn.Module):
         self.exp_n_sum = np.sum(self.exp_n, axis=0) # sum over w, exp_n is [V K] dimensionality
         self.exp_s_sum = np.sum(self.exp_s, axis=0) # sum over w, exp_p is [V K] dimensionality
         # self.update_hyperparams(docs) # update hyperparameters
-        elbo_z = self.compute_elbo()
-        return elbo_z
 
     def pred_ind(self, index_found):
         pred_x = 0
@@ -357,9 +339,9 @@ class GDTM(nn.Module):
                 # normalization
                 temp_gamma_s_sum = np.sum(temp_gamma_ss[w_i]) + np.sum(temp_gamma_sr[w_i])
                 temp_gamma_r_sum = np.sum(temp_gamma_rr[w_i])
-                temp_gamma_ss[w_i] /= temp_gamma_s_sum
-                temp_gamma_sr[w_i] /= temp_gamma_s_sum
-                temp_gamma_rr[w_i] /= temp_gamma_r_sum
+                temp_gamma_ss[w_i] /= temp_gamma_s_sum + 1e-6
+                temp_gamma_sr[w_i] /= temp_gamma_s_sum + 1e-6
+                temp_gamma_rr[w_i] /= temp_gamma_r_sum + 1e-6
             self.gamma_ss[doc.doc_id] = temp_gamma_ss
             self.gamma_sr[doc.doc_id] = temp_gamma_sr
             self.gamma_rr[doc.doc_id] = temp_gamma_rr
@@ -370,8 +352,6 @@ class GDTM(nn.Module):
         self.exp_n_sum = np.sum(self.exp_n, axis=0)  # sum over w, exp_n is [V K] dimensionality
         self.exp_s_sum = np.sum(self.exp_s, axis=0)  # sum over w, exp_p is [V K] dimensionality
         # self.update_hyperparams(docs) # update hyperparameters
-        elbo_z = self.compute_elbo()
-        return elbo_z
 
     def update_hyperparams(self, docs):
         '''
@@ -386,40 +366,52 @@ class GDTM(nn.Module):
             gamma_r_sum += self.gamma_sr[doc.doc_id].sum(axis=0) + self.gamma_rr[doc.doc_id].sum(axis=0)
         self.pi = gamma_s_sum / (gamma_r_sum + gamma_s_sum + eps)
 
-    def inference_SCVB_AEVI(self, args, max_epoch=1000, save_every=100):
+    def inference_SCVB_AEVI(self, args, max_epoch=10, save_every=100):
+        '''
+        inference algorithm for dynamic seed-guided topic model, apply stochastic collaposed variational inference for latent variable z,
+        and apply stochastic gradient descent for dynamic variables \eta (\alpha)
+        '''
         elbo = [0,]
+        max_epoch = 100
         for epoch in range(0, max_epoch):
             print("Training for epoch", epoch)
             # for testing, we use full batch generator
-            for i, d in enumerate(self.full_batch_generator): # for each epoach, we sample mini_batch data once
+            for i, d in enumerate(self.full_batch_generator): # For each epoach, we sample a series of mini_batch data once
                 print("Running for %d minibatch", i)
-                batch_docs, batch_indices, batch_times, batch_Cj = d  # batch_Cj is total number of minibatch
-                rnn_input = self.get_rnn_input(batch_docs, batch_indices, batch_times) # get T x V input for rnn
-                # todo: maybe rnn_input should be normalized as DETM paper
+                batch_docs, batch_indices, batch_times, batch_C = d  # batch_C is total number of words within a minibatch, used for estimation of SCVB0
+                rnn_input = self.get_rnn_input(batch_docs, batch_indices, batch_times) # obtain T x V input for rnn
                 start_time = time.time()
-                # elbo_expect_eta = self.CVB0(batch_docs, batch_indices, batch_times, batch_Cj)
-                elbo_expect_eta = self.CVB0_generative(batch_docs, batch_indices, batch_times, batch_Cj)
-                # update eta via LSTM/Transformer network by gradient descent, this component can be replaced by Kalman filter
-                # self.optimizer.zero_grad()
-                # self.zero_grad()
-                # self.eta, kl_eta = self.get_eta(rnn_input) # ingest rnn_input
-                # self.alpha = self.alpha_softplus_act(self.eta, comp_met="infer")
-                # self.alpha = self.alpha.detach().cpu().numpy()  # T x K
-                # loss = kl_eta + elbo_expect_eta
-                # loss.backward()
-                # if self.clip > 0:
-                #     torch.nn.utils.clip_grad_norm_(self.parameters(), args.clip)
+                # self.CVB0(batch_docs, batch_indices, batch_times, batch_C)
+                # self.CVB0_generative(batch_docs, batch_indices, batch_times, batch_C)
+                # update eta via LSTM/Transformer model using SGD, this dynamic component can be replaced by Kalman filter
+                self.optimizer.zero_grad()
+                self.zero_grad()
+                self.eta, kl_eta = self.get_eta(rnn_input)
+                self.alpha = self.alpha_softplus_act() # alpha is T x K
+                self.alpha = self.alpha.detach().cpu().numpy()
+                kl_z_x = self.get_kl_z_x(batch_times)
+                loss = kl_eta + kl_z_x
+                print(kl_eta, kl_z_x)
+                loss.backward()
+                if self.clip > 0: # todo: check clip or clamp in new version of pytorch
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), self.clip)
                 self.optimizer.step()
                 print("\t took %s seconds" % (time.time() - start_time))
-                # elbo.append(loss.detach().cpu().numpy())
-                # print("epoch %s: elbo %s, diff %s "% (epoch, elbo[-1], np.abs(elbo[-1] - elbo[-2])))
+                elbo.append(loss.detach().cpu().numpy().item())
+                print(elbo)
+                print("epoch %s: elbo %s, diff %s "% (epoch, elbo[-1], np.abs(elbo[-1] - elbo[-2])))
                 # if epoch % save_every == 0:
                 #     self.save_model(epoch)
 
-    def get_rnn_input(self, batch_docs, batch_indices, batch_times) :
-        # rnn_input = torch.zeros(self.T, self.V).to(device)
+    def get_rnn_input(self, batch_docs, batch_indices, batch_times):
+        '''
+        get rnn input from documents
+        :param batch_docs: a batch of documents
+        :param batch_indices: the index of document within a minibatch
+        :param batch_times: the corresponding temporal labels
+        :return: a normalized bag-of-words representation of documents in minibatch across time labels, it is a T x V matrix
+        '''
         rnn_input = torch.zeros(self.T, self.V)
-        # cnt = torch.zeros(self.T).to(device)
         cnt = torch.zeros(self.T)
         batch_size = len(batch_docs)
         BOW_docs = np.zeros((batch_size, self.V)) # batch_D x V
