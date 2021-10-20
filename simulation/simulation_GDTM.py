@@ -5,10 +5,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from scipy.special import gamma, gammaln, digamma, logsumexp
-from scipy.stats import norm
-import pickle
-from simulated_corpus import Corpus
-import math
+from simulation.simulated_corpus import Corpus
 import torch
 from torch import nn, optim
 import torch.nn.functional as F

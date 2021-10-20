@@ -1,12 +1,9 @@
-import argparse
-import logging
-import numpy as np
-import os
-import sys
-from corpus import Corpus
 import torch
-from simulation_GDTM import GDTM
-from utils import simulation_tokenize_phecode_icd
+import logging
+import argparse
+from simulation.simulated_corpus import Corpus
+from simulation.simulation_GDTM import GDTM
+from simulation.simulation_utils import simulation_tokenize_phecode_icd
 
 logger = logging.getLogger("GDTM simulation processing")
 parser = argparse.ArgumentParser()

@@ -10,7 +10,7 @@ from collections import Counter
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import argparse
-from utils import simulation_tokenize_phecode_icd
+from simulation.simulation_utils import simulation_tokenize_phecode_icd
 
 D = TypeVar('D')
 

@@ -24,7 +24,6 @@ class GDTM(nn.Module):
         """
         super(GDTM, self).__init__()
         self.out = out  # folder to save experiments
-
         self.full_batch_generator = Corpus.generator_full_batch(corpus) # full batch size
         self.C = corpus.C # C is the number of words in the corpus, use for updating gamma for SCVB0
         self.mini_batchgenerator = Corpus.generator_mini_batch(corpus, 5) # default batch size 1000
@@ -91,7 +90,7 @@ class GDTM(nn.Module):
 
     def initialize_tokens(self):
         for i, d in enumerate(self.full_batch_generator):
-            batch_docs, batch_indices, batch_times, batch_Cj = d # batch_Cj is total number of minibatch
+            batch_docs, batch_indices, batch_times, batch_C = d # batch_C is total number of minibatch
             for d_i, doc in zip(batch_indices, batch_docs):
                 for word_id, freq in doc.words_dict.items(): # word_id represents the index of word in vocabulary
                     for k in range(self.K):
@@ -130,10 +129,28 @@ class GDTM(nn.Module):
         log_sum_n_terms, log_sum_s_terms = 0, 0
         alpha = nn.Softplus(self.eta)
         # E_q[log p(z | alpha)], alpha is T x K matrix
-        # p_z = gammaln(np.sum(self.alpha[batch_times], axis=1)) - np.sum(gammaln(self.alpha[batch_times]), axis=1) + \
-        #         np.sum(gammaln(self.alpha[batch_times] + self.exp_m), axis=1) - \
-        #         gammaln(np.sum(self.alpha[batch_times], axis=1) + self.exp_m_sum)
-        # kl += np.sum(p_z)
+        # print('alpha')
+        # print( (gammaln(np.sum(self.alpha[batch_times], axis=1))).shape )
+        # print( (gammaln(np.sum(self.alpha[batch_times], axis=1))).sum() )
+        # print( (-np.sum(gammaln(self.alpha[batch_times]), axis=1)).shape )
+        # print( (-np.sum(gammaln(self.alpha[batch_times]), axis=1)).sum() )
+        # print( (np.sum(gammaln(self.alpha[batch_times] + self.exp_m), axis=1)).shape )
+        # print( (np.sum(gammaln(self.alpha[batch_times] + self.exp_m), axis=1)).sum() )
+        # print( (-gammaln(np.sum(self.alpha[batch_times], axis=1) + self.exp_m_sum)).shape)
+        # print( (-gammaln(np.sum(self.alpha[batch_times], axis=1) + self.exp_m_sum)).sum())
+        print('absolute value of eta')
+        # print(torch.abs(self.eta))
+        alpha_abs = torch.abs(self.eta)
+        alpha_abs = alpha_abs.detach().cpu().numpy()
+        print(self.alpha.sum())
+        print(alpha_abs.sum())
+        self.alpha = alpha_abs
+
+        p_z = gammaln(np.sum(self.alpha[batch_times], axis=1)) - np.sum(gammaln(self.alpha[batch_times]), axis=1) + \
+                np.sum(gammaln(self.alpha[batch_times] + self.exp_m), axis=1) - \
+                gammaln(np.sum(self.alpha[batch_times], axis=1) + self.exp_m_sum)
+        kl += np.sum(p_z)
+        print(kl)
         # E_q[log p(w | z, beta, mu, pi)], overflow
         # for k in range(self.K):
         #     log_sum_n_terms = gammaln(self.beta_sum) - self.V*gammaln(self.beta) + \
@@ -225,7 +242,7 @@ class GDTM(nn.Module):
         '''
         return F.softplus(self.eta)
 
-    def CVB0(self, docs, indices, times, C):
+    def CVB0(self, docs, indices, times, C=None):
         temp_exp_m = np.zeros((self.D, self.K))
         temp_exp_n = np.zeros((self.V, self.K))
         temp_exp_s = np.zeros((self.V, self.K))
@@ -313,7 +330,7 @@ class GDTM(nn.Module):
                         E_n_wk[word_id, k] += (self.gamma_rr[doc.doc_id][w_i, k] + self.gamma_sr[doc.doc_id][w_i, k])*freq
         return E_m_dk, E_n_wk, E_s_wk
 
-    def CVB0_generative(self, docs, indices, times, Cj):
+    def CVB0_generative(self, docs, indices, times, C=None):
         # E step
         for d_i, doc in zip(indices, docs):
             # (the number of words in a doc) x K, not use V x K to save space
@@ -363,7 +380,7 @@ class GDTM(nn.Module):
         for doc in docs:
             # todo: gamma should be changed to sparse matrix to speed up
             gamma_s_sum += self.gamma_ss[doc.doc_id].sum(axis=0) # sum over word to obtain K-len vector
-            gamma_r_sum += self.gamma_sr[doc.doc_id].sum(axis=0) + self.gamma_rr[doc.doc_id].sum(axis=0)
+            gamma_r_sum += self.gamma_sr[doc.doc_id].sum(axis=0) # + self.gamma_rr[doc.doc_id].sum(axis=0) # no second term
         self.pi = gamma_s_sum / (gamma_r_sum + gamma_s_sum + eps)
 
     def inference_SCVB_AEVI(self, args, max_epoch=10, save_every=100):
@@ -379,10 +396,11 @@ class GDTM(nn.Module):
             for i, d in enumerate(self.full_batch_generator): # For each epoach, we sample a series of mini_batch data once
                 print("Running for %d minibatch", i)
                 batch_docs, batch_indices, batch_times, batch_C = d  # batch_C is total number of words within a minibatch, used for estimation of SCVB0
+                # batch_docs, batch_indices, batch_times, batch_C = d  # batch_C is total number of words within a minibatch, used for estimation of SCVB0
                 rnn_input = self.get_rnn_input(batch_docs, batch_indices, batch_times) # obtain T x V input for rnn
                 start_time = time.time()
-                # self.CVB0(batch_docs, batch_indices, batch_times, batch_C)
-                # self.CVB0_generative(batch_docs, batch_indices, batch_times, batch_C)
+                # self.CVB0(batch_docs, batch_indices, batch_times)
+                # self.CVB0_generative(batch_docs, batch_indices, batch_times)
                 # update eta via LSTM/Transformer model using SGD, this dynamic component can be replaced by Kalman filter
                 self.optimizer.zero_grad()
                 self.zero_grad()
@@ -396,6 +414,7 @@ class GDTM(nn.Module):
                 if self.clip > 0: # todo: check clip or clamp in new version of pytorch
                     torch.nn.utils.clip_grad_norm_(self.parameters(), self.clip)
                 self.optimizer.step()
+                self.CVB0(batch_docs, batch_indices, batch_times) # update later
                 print("\t took %s seconds" % (time.time() - start_time))
                 elbo.append(loss.detach().cpu().numpy().item())
                 print(elbo)
