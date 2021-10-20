@@ -47,23 +47,33 @@ for icd in unique_icd9:
             else:
                 child_phecode_set.add(pc)
 
-# for icd in unique_icd9:
-#     rows = phecode_icd9_map.loc[phecode_icd9_map['icd9'] == icd]
-#     rows_phecodes = list(rows.phecode)
-#     flag = False
-#     for pc in rows_phecodes: # check whether all icd codes are distributed in parent_phecode_set/child_phecode_set
-#         # if pc in parent_phecode_set:
-#         #     flag = True
-#         if pc in child_phecode_set:
-#             flag = True
-#     print(flag)
-#     if flag == False:
-#         print(icd, rows_phecodes)
+print(len(parent_phecode_set))
+print(len(nonuse_parent_phecode_set))
+print(len(parent_phecode_set.union(nonuse_parent_phecode_set)))
+print(len(parent_phecode_set - nonuse_parent_phecode_set))
+new_parent_phecode_set = parent_phecode_set - nonuse_parent_phecode_set # subtract non-highest parent phecode
+
+for icd in unique_icd9:
+    rows = phecode_icd9_map.loc[phecode_icd9_map['icd9'] == icd]
+    rows_phecodes = list(rows.phecode)
+    # flag = False
+    for pc in rows_phecodes: # check whether all icd codes are distributed in parent_phecode_set/child_phecode_set
+        # if pc in parent_phecode_set:
+        #     flag = True
+        # if pc in child_phecode_set:
+        #     flag = True
+        if pc in new_parent_phecode_set:
+            flag = True
+    # print(flag)
+    # if flag == False:
+    #     print(icd, rows_phecodes)
+
 
 phecode_icd_items = list(zip(phecode_icd9_map.phecode, phecode_icd9_map.icd9)) # get all (phecode, icd9) pairs
 # 20783, same as the rows of phecode_icd9_map
 parent_phecode_icd_dict = {} # each parent phecode is a key, the value corresponds to a key is [ICD9, ... , ICD9]
 child_phecode_icd_dict = {} # each child phecode is a key, the value corresponds to a key is [ICD9, ... , ICD9]
+new_parent_phecode_dict = {}
 count = 0
 for pc, icd in phecode_icd_items:
     if pc in parent_phecode_set:
@@ -76,12 +86,17 @@ for pc, icd in phecode_icd_items:
             child_phecode_icd_dict[pc] = [icd]
         else:
             child_phecode_icd_dict[pc].append(icd)
-# print(parent_phecode_icd_dict)
-# print(len(parent_phecode_icd_dict['8.0'])) # 91, it is right
-# print(len(child_phecode_icd_dict['8.0'])) # 91, it is right
-# print(len(child_phecode_icd_dict.keys()))
+    if pc in new_parent_phecode_set:
+        if pc not in new_parent_phecode_dict.keys():
+            new_parent_phecode_dict[pc] = [icd]
+        else:
+            new_parent_phecode_dict[pc].append(icd)
 
 with open('phecode_mapping\parent_phecode_icd_dict.json', 'w') as fp:
     json.dump(parent_phecode_icd_dict, fp)
 with open('phecode_mapping\child_phecode_icd_dict.json', 'w') as fp:
     json.dump(child_phecode_icd_dict, fp)
+with open('phecode_mapping\/new_parent_phecode_dict.json', 'w') as fp:
+    json.dump(new_parent_phecode_dict, fp)
+print(len(parent_phecode_icd_dict.keys()))
+print(len(new_parent_phecode_dict.keys()))

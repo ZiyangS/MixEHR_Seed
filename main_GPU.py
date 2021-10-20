@@ -5,7 +5,7 @@ import os
 import sys
 from corpus import Corpus
 import torch
-from GDTM_AEVI import GDTM
+from GDTM_GPU import GDTM
 from utils import tokenize_phecode_icd
 
 logger = logging.getLogger("GDTM training processing")
@@ -15,9 +15,7 @@ parser.add_argument('num_topics', help='Number of topics') # it will not be usef
 parser.add_argument('corpus', help='Path to read corpus file', default='./store/')
 parser.add_argument('output', help='Directory to store model', default='./result/')
 parser.add_argument("-epoch", "--max_epoch", help="Maximum number of iterations (Default 500)", type=int, default=10)
-parser.add_argument("-every", "--save_every", help="Store model every X number of iterations (Default 50)",
-                            type=int, default=50)
-
+parser.add_argument("-every", "--save_every", help="Store model every X number of iterations (Default 50)", type=int, default=50)
 # arguments for pytorch
 parser.add_argument('--lr', type=float, default=0.005, help='learning rate')
 parser.add_argument('--clip', type=float, default=0.0, help='gradient clipping')
@@ -35,7 +33,21 @@ def run(args):
     # vocab_ids: key is icd, value is the mapped index of icd from 1 to V-1
     # tokenized_phecode_icd: key is mapped phecode index, value is mapped icd code index
     phecode_ids, vocab_ids, tokenized_phecode_icd = tokenize_phecode_icd()
-    gdtm = GDTM(len(tokenized_phecode_icd), corpus, tokenized_phecode_icd, args.output)
+    print(tokenized_phecode_icd)
+    K = len(tokenized_phecode_icd.keys())
+    icd_list = []
+    for w_l in tokenized_phecode_icd.values():
+        icd_list.extend(w_l)
+    V = len(set(icd_list))
+    print(K, V)
+    from collections import Counter
+    d = Counter(icd_list)
+    res = [k for k, v in d.items() if v > 1] # todo: check why we have duplicate ICD code for each phecode
+    seeds_topic_matrix = torch.zeros(V, K, dtype=torch.int)
+    for k, w_l in tokenized_phecode_icd.items():
+        for w in w_l:
+            seeds_topic_matrix[w, k] = 1 # todo: every time is different, random tokenization? we should only do one tokenizationa at corpus.py
+    gdtm = GDTM(K, corpus, seeds_topic_matrix, args.output)
     gdtm = gdtm.to(device)
     # logger.info('''
     #     ======= Parameters =======
@@ -47,8 +59,7 @@ def run(args):
     #     save every:\t\t%s
     #     ==========================
     # ''' % (args.corpus, args.output, args.num_topics, args.max_iter, args.save_every))
-    gdtm.inference_SCVB_AEVI(args, max_epoch=args.max_epoch, save_every=args.save_every)
+    gdtm.inference_SCVB_SGD(args, max_epoch=args.max_epoch, save_every=args.save_every)
 
 if __name__ == '__main__':
     run(parser.parse_args(['100', './store/', './result/']))
-

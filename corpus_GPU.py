@@ -66,15 +66,15 @@ class Corpus(Dataset):
     #     for doc in self.dataset:
     #         words_dict = doc.words_dict
     #         for word_id, freq in words_dict.items():
-    #             BOW[doc.doc_id, word_id] = freq
+    #             BOW[doc.doc_id, word_id] = freq # doc_id, here is wrong
     #     return BOW
-    #
-    # def corpus_time_labels(self):
-    #     # full batch, we assume
-    #     t_labels = np.zeros(self.D)
-    #     for doc in self.dataset:
-    #         t_labels[doc.doc_id] = doc.t_d
-    #     return t_labels
+
+    def corpus_time_labels(self):
+        # full batch, we assume
+        t_labels = np.zeros(self.D)
+        for doc in self.dataset:
+            t_labels[doc.doc_id] = doc.t_d
+        return t_labels
 
     @staticmethod
     def __collate_model__(batch):
@@ -82,20 +82,17 @@ class Corpus(Dataset):
         Returns a batch for each iteration of the DataLoader
         '''
         docs, indixes = zip(*batch)
-        # list of docs, array of indexes, list of docs's times, the total number of words in a minibatch
-        # (or list of docs's word nums?)
+        # list of docs in minibatch, indexes of docs in minibatch, docs' times in minibatch, docs' total number of words in minibatch
         return list(docs), np.array(indixes), np.array([doc[0].t_d for doc in batch]), np.sum([p[0].Cj for p in batch])
 
-
     @staticmethod
-    def build_from_DTM_fileformat(data_path: str, time_path: str, store_path: str = None,):
+    def build_from_DTM_fileformat(data_path: str, time_path: str, store_path: str = None):
         '''
         Reads a longitudinal EHR data and return a Corpus object.
         :param data_path: data records, no header, columns are separated with spaces.
                     It contains: doc_id, pat_id, word_id, frequency, times.
         :param time_path: time data for each document.
         :param store_path: store output Corpus object.
-        :return:
         '''
         def __read_time_Cj__(doc_ids, labels):
             D = len(doc_ids.keys())
@@ -305,8 +302,8 @@ class Corpus(Dataset):
             return "<Document object (%s)>" % self.__str__()
 
         def __str__(self): # print Document object will return this string
-            return "Document id: (%s). Patient id: %s, Words %s, Temporal Label %s" % (
-                self.doc_id, self.pat_id, len(self.words_dict), self.t_d)
+            return "Document id: (%s). Patient id: %s, Words %s, Count %s, Temporal Label %s" % (
+                self.doc_id, self.pat_id, len(self.words_dict), self.Cj, self.t_d)
 
 
 
@@ -331,4 +328,3 @@ def run(args):
 if __name__ == '__main__':
     run(parser.parse_args(['process', '-n', '150', './data/', './store/']))
     # run(parser.parse_args(['split', 'store/', 'store/']))
-
