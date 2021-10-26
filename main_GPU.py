@@ -3,10 +3,11 @@ import logging
 import numpy as np
 import os
 import sys
-from corpus import Corpus
+from corpus_GPU import Corpus
 import torch
 from GDTM_GPU import GDTM
 from utils import tokenize_phecode_icd
+import pickle
 
 logger = logging.getLogger("GDTM training processing")
 parser = argparse.ArgumentParser()
@@ -29,24 +30,25 @@ def run(args):
     print(args)
     # cmd = args.cmd
     corpus = Corpus.read_corpus_from_directory(args.corpus)
+    phecode_ids = pickle.load(open("./mapping/phecode_ids.pkl", "rb"))
+    vocab_ids = pickle.load(open("./mapping/vocab_ids.pkl", "rb"))
+    tokenized_phecode_icd = pickle.load(open("./mapping/tokenized_phecode_icd.pkl", "rb"))
     # phecode_ids: key is phecode, value is the mapped index of phecode from 1 to K-1
     # vocab_ids: key is icd, value is the mapped index of icd from 1 to V-1
     # tokenized_phecode_icd: key is mapped phecode index, value is mapped icd code index
-    phecode_ids, vocab_ids, tokenized_phecode_icd = tokenize_phecode_icd()
-    print(tokenized_phecode_icd)
     K = len(tokenized_phecode_icd.keys())
-    icd_list = []
-    for w_l in tokenized_phecode_icd.values():
-        icd_list.extend(w_l)
-    V = len(set(icd_list))
+    icd_list = vocab_ids.keys()
+    V = len(icd_list)
     print(K, V)
-    from collections import Counter
-    d = Counter(icd_list)
-    res = [k for k, v in d.items() if v > 1] # todo: check why we have duplicate ICD code for each phecode
+    mapping_icd_list = []
+    for w_l in tokenized_phecode_icd.values():
+        mapping_icd_list.extend(w_l)
+    print(len(mapping_icd_list))
     seeds_topic_matrix = torch.zeros(V, K, dtype=torch.int)
     for k, w_l in tokenized_phecode_icd.items():
         for w in w_l:
             seeds_topic_matrix[w, k] = 1 # todo: every time is different, random tokenization? we should only do one tokenizationa at corpus.py
+    print(seeds_topic_matrix.sum())
     gdtm = GDTM(K, corpus, seeds_topic_matrix, args.output)
     gdtm = gdtm.to(device)
     # logger.info('''

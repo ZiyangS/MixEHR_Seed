@@ -177,9 +177,6 @@ class Corpus(Dataset):
         docs = corpus.dataset
         # precompute all labels
         t_labels = np.zeros(len(corpus))
-        # for doc in docs:
-        #     # todo: change the mapped index later instead of enumerate
-        #     print(doc.doc_id)
         for i, doc in enumerate(docs):
             # t_labels[doc.doc_id] = doc.t_d
             t_labels[i] = doc.t_d

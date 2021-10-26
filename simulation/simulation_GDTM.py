@@ -77,7 +77,7 @@ class GDTM(nn.Module):
                             self.exp_s[word_id][k] = self.pi[k] * 1
                         else:
                             self.exp_n[word_id][k] = 1 / (self.K-1)
-                for k in range(self.K): # todo: it can be simplied by using np.full
+                for k in range(self.K):
                     self.exp_m[d_i][k] = 1 / self.K * 25 # 25 is the number of words for a document in a simulation dataset
             self.exp_m_sum = np.sum(self.exp_m, axis=1) # sum over k, exp_m is [D K] dimensionality, exp_m_sum is D-len vector
             self.exp_n_sum = np.sum(self.exp_n, axis=0) # sum over w, exp_n is [V K] dimensionality, exp_n_sum is K-len vector
@@ -215,7 +215,6 @@ class GDTM(nn.Module):
                 # print(w_i, word_id)
                 # word_id represents the index of word in vocabulary
                 for k in range(self.K): # update gamma_dik
-                    # todo: we could update K topics at same time? because we need to check [z_di = k] it is difficult
                     if word_id in self.topic_seeds_dict[k]: # seed word, could be regular topic or seed topic
                         # update seed topic
                         temp_gamma_ss[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.mu + self.exp_s[word_id, k]) \
@@ -234,7 +233,6 @@ class GDTM(nn.Module):
                 temp_gamma_sr[w_i] /= temp_gamma_s_sum + 1e-6
                 temp_gamma_rr[w_i] /= temp_gamma_r_sum + 1e-6
                 # calculate frequency * gamma for each word, iterate words in documents
-                # todo: compute exp_m with condition, check the seed or regular word
                 # use indictor. just multiply a k length x_indicator
                 # temp_exp_m[d_i] += (self.pi*temp_gamma_ss[w_i] + (1-self.pi)*(temp_gamma_rr[w_i] + temp_gamma_sr[w_i])) * freq
                 temp_exp_m[d_i] += (temp_gamma_ss[w_i] + temp_gamma_rr[w_i] + temp_gamma_sr[w_i]) * freq / 2
@@ -305,7 +303,6 @@ class GDTM(nn.Module):
             for w_i, (word_id, freq) in enumerate(doc.words_dict.items()):  # w_i is the index of word in each document
                 # word_id represents the index of word in vocabulary
                 for k in range(self.K):  # update gamma_dik
-                    # todo: we could update K topics at same time? because we need to check [z_di = k] it is difficult
                     if word_id in self.topic_seeds_dict[k]:  # seed word, could be regular topic or seed topic
                         # update seed topic
                         temp_gamma_ss[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.mu + self.exp_s[word_id, k]) \
@@ -346,7 +343,6 @@ class GDTM(nn.Module):
         gamma_s_sum = np.zeros(self.K)
         gamma_r_sum = np.zeros(self.K)
         for doc in docs:
-            # todo: gamma should be changed to sparse matrix to speed up
             gamma_s_sum += self.gamma_ss[doc.doc_id].sum(axis=0) # sum over word to obtain K-len vector
             gamma_r_sum += self.gamma_sr[doc.doc_id].sum(axis=0) + self.gamma_rr[doc.doc_id].sum(axis=0)
         self.pi = gamma_s_sum / (gamma_r_sum + gamma_s_sum + eps)
