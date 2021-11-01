@@ -139,7 +139,7 @@ class Corpus(Dataset):
         logger.info(f'''
         ========= DataSet Information =========
         Documents: {len(corpus.dataset)}
-        Patients: {len(corpus.dataset)} # this is not right
+        Patients: {len(data.pat_id.unique())} 
         Times: {corpus.T}
         Word Tokes: {corpus.V}
         ======================================= 
@@ -198,6 +198,9 @@ class Corpus(Dataset):
         '''
         corpus_file = os.path.join(path, "corpus.pkl")
         corpus = pickle.load(open(corpus_file, "rb"))
+        # print(corpus.D)
+        # import time
+        # time.sleep(200)
         return corpus
 
     @staticmethod
@@ -244,8 +247,8 @@ def run(args):
     print(STORE_FOLDER)
 
     if cmd == 'process':
-        path = os.path.join(BASE_FOLDER, 'document_full_data.csv')
-        labels = os.path.join(BASE_FOLDER, 'label_full_data.csv')
+        path = os.path.join(BASE_FOLDER, 'document_part_data.csv')
+        labels = os.path.join(BASE_FOLDER, 'label_part_data.csv')
         Corpus.build_from_GDTM_fileformat(path, labels, STORE_FOLDER)
 
     elif cmd == 'split':
@@ -254,5 +257,5 @@ def run(args):
         Corpus.split_train_test(c, testing_rate, STORE_FOLDER)
 
 if __name__ == '__main__':
-    run(parser.parse_args(['process', '-n', '150', './data/', './store/']))
-    # run(parser.parse_args(['split', 'store/', 'store/']))
+    # run(parser.parse_args(['process', '-n', '150', './data/', './test_store/']))
+    run(parser.parse_args(['split', 'store/test/', 'store/']))
