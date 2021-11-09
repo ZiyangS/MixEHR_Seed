@@ -150,42 +150,34 @@ class GDTM(nn.Module):
         eta is T x K matrix, each eta_t is estimated given eta{1:t-1} (i.e. eta{t-1})
         eta_t thus is modeled by neural network with concatenated input of rnn_input and eta_{t-1}
         '''
-        # print(rnn_inp.sum(axis=1))
         inp = self.q_eta_map(rnn_inp).unsqueeze(1) # q_eta_map: T x V -> T x eta_hidden_size -> T x 1 x eta_hidden_size
         hidden = self.init_hidden()
         output, _ = self.q_eta(inp, hidden)
         output = output.squeeze() # output is T x eta_hidden_size
         etas = torch.zeros(self.T, self.K).to(device)
         kl_eta = []
-        # print(output.sum(axis=1))
         # get eta_0 and kl(eta_0) initially, eta_0 depends on zeros as eta_t is dependent on eta_{t-1},
         inp_0 = torch.cat([output[0], torch.zeros(self.K,).to(device)], dim=0) # we have k-len zero value vector because eta_{t-1} for eta_0 is not exist, size is eta_hidden_size (200) + topic size
-        # print(inp_0)
         mu_0 = self.mu_q_eta(inp_0)
         logsigma_0 = self.logsigma_q_eta(inp_0)
         etas[0] = self.reparameterize(mu_0, logsigma_0)
-        # print(etas[0])
         p_mu_0 = torch.zeros(self.K,).to(device)
         logsigma_p_0 = torch.zeros(self.K,).to(device)
         kl_0 = self.get_kl_eta(mu_0, logsigma_0, p_mu_0, logsigma_p_0) # equal to self.get_kl_eta(mu_0, logsigma_0).sum()
         kl_eta.append(kl_0)
-        # print(kl_0)
         for t in range(1, self.T): # get eta_{1:T} given previous eta_{t-1}
             inp_t = torch.cat([output[t], etas[t-1]], dim=0)
             mu_t = self.mu_q_eta(inp_t)
             logsigma_t = self.logsigma_q_eta(inp_t)
-            # print(inp_t)
             if (logsigma_t > self.max_logsigma_t).sum() > 0:
                 logsigma_t[logsigma_t > self.max_logsigma_t] = self.max_logsigma_t
             elif (logsigma_t < self.min_logsigma_t).sum() > 0:
                 logsigma_t[logsigma_t < self.min_logsigma_t] = self.min_logsigma_t
             etas[t] = self.reparameterize(mu_t, logsigma_t)
-            # print(etas[t])
             p_mu_t = etas[t-1]
             logsigma_p_t = torch.log(self.delta * torch.ones(self.K,).to(device))
             kl_t = self.get_kl_eta(mu_t, logsigma_t, p_mu_t, logsigma_p_t)
             kl_eta.append(kl_t)
-            # print(kl_t)
         kl_eta = torch.stack(kl_eta).sum()
         return etas, kl_eta
 
@@ -226,7 +218,9 @@ class GDTM(nn.Module):
             # calculate frequency * gamma for each word in a document
             seed_word_list = torch.nonzero(self.seeds_topic_matrix[BOW_nonzero].sum(axis=1)).squeeze(1)
             non_seed_word_list = torch.nonzero(1-self.seeds_topic_matrix[BOW_nonzero].sum(axis=1)).squeeze(1)
+            # words can be viewed as seed words for a topic
             temp_gamma_s = (self.pi*temp_gamma_ss + (1-self.pi)*(temp_gamma_sr+temp_gamma_rr))[BOW_nonzero][seed_word_list]
+            # words can not be viewed as seed words for a topic, thus it is regular words for all topics
             temp_gamma_r = temp_gamma_rr[BOW_nonzero][non_seed_word_list]
             temp_gamma = torch.cat((temp_gamma_s, temp_gamma_r), 0)
             # temp_exp_m[doc_id] += torch.sum(torch.cat((temp_gamma_s, temp_gamma_r), 0) * batch_BOW[d_i, BOW_nonzero].unsqueeze(1), dim=0)
@@ -247,78 +241,78 @@ class GDTM(nn.Module):
         self.exp_s_sum = torch.sum(self.exp_s, dim=0) # sum over w, exp_p is [V K] dimensionality
         self.update_hyperparams(gamma_sr_sum) # update hyperparameters
 
-    def pred_ind(self, index_found):
-        pred_x = 0
-        pred_z = index_found % self.K # get topic k from 0 to K
-        if index_found < self.K:
-                pred_x = 1
-        return pred_x, pred_z
-
-    def infer_ind(self, docs, indices):
-        infer_x = {doc.doc_id: np.zeros(len(doc.words_dict)) for doc in docs}  # D x N_d
-        infer_z = {doc.doc_id: np.zeros(len(doc.words_dict)) for doc in docs}  # D x N_d
-        for d_i, doc in zip(indices, docs):
-            for w_i, (word_id, freq) in enumerate(doc.words_dict.items()): # w_i is the index of word in each document
-                index_found = np.argmax(np.concatenate((self.gamma_ss[doc.doc_id][w_i], self.gamma_sr[doc.doc_id][w_i], self.gamma_rr[doc.doc_id][w_i])))
-                infer_x[doc.doc_id][w_i], infer_z[doc.doc_id][w_i] = self.pred_ind(index_found)
-        return infer_x, infer_z
-
-    def exp_suff(self, docs, indices):
-        infer_x, infer_z = self.infer_ind(docs, indices)
-        E_m_dk = np.zeros((self.D, self.K))
-        E_s_wk = np.zeros((self.V, self.K))
-        E_n_wk = np.zeros((self.V, self.K))
-        for d_i, doc in zip(indices, docs):
-            for w_i, (word_id, freq) in enumerate(doc.words_dict.items()):  # w_i is the index of word in each document
-                E_m_dk[d_i] += (self.gamma_ss[doc.doc_id][w_i] + self.gamma_sr[doc.doc_id][w_i] + self.gamma_rr[doc.doc_id][w_i]) * freq/2
-                # E_m_dk[d_i] += (self.pi*(self.gamma_ss[doc.doc_id][w_i]) + (1-self.pi)*(self.gamma_sr[doc.doc_id][w_i]+
-                # self.gamma_rr[doc.doc_id][w_i]))*freq/2
-                if infer_x[doc.doc_id][w_i] == 1: # x_indicator is assigned as 1, seed topic
-                    assign_k = int(infer_z[doc.doc_id][w_i])
-                    E_s_wk[w_i, assign_k] += self.gamma_ss[doc.doc_id][w_i, assign_k] * freq
-                else: # x_indicator is 0, regular topic
-                    for k in range(self.K):
-                        E_n_wk[word_id, k] += (self.gamma_rr[doc.doc_id][w_i, k] + self.gamma_sr[doc.doc_id][w_i, k])*freq
-        return E_m_dk, E_n_wk, E_s_wk
-
-    def CVB0_generative(self, docs, indices, times, C=None):
-        # E step
-        for d_i, doc in zip(indices, docs):
-            # (the number of words in a doc) x K, not use V x K to save space
-            temp_gamma_rr = np.zeros((len(doc.words_dict), self.K))
-            temp_gamma_sr = np.zeros((len(doc.words_dict), self.K))
-            temp_gamma_ss = np.zeros((len(doc.words_dict), self.K))  # non-seed regular word will be zero
-            for w_i, (word_id, freq) in enumerate(doc.words_dict.items()):  # w_i is the index of word in each document
-                # word_id represents the index of word in vocabulary
-                for k in range(self.K):  # update gamma_dik
-                    if word_id in self.topic_seeds_dict[k]:  # seed word, could be regular topic or seed topic
-                        # update seed topic
-                        temp_gamma_ss[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.mu + self.exp_s[word_id, k]) \
-                                                / (self.mu_sum[k] + self.exp_s_sum[k]) * self.pi[k]
-                        # update regular topic
-                        temp_gamma_sr[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.beta + self.exp_n[word_id, k]) \
-                                                / (self.beta_sum + self.exp_n_sum[k]) * (1 - self.pi[k])
-                    else:  # regular word, must be regular topic
-                        temp_gamma_rr[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.beta + self.exp_n[word_id, k])\
-                                                / (self.beta_sum + self.exp_n_sum[k])
-                        # temp_gamma_rr[w_i][k] *= (self.pi[k] + self.exp_n_sum[k] + self.beta_sum) / (
-                        #             2 * self.pi[k] + self.exp_n_sum[k] + self.beta_sum + self.exp_s_sum[k] + self.mu_sum[k])
-                # normalization
-                temp_gamma_s_sum = np.sum(temp_gamma_ss[w_i]) + np.sum(temp_gamma_sr[w_i])
-                temp_gamma_r_sum = np.sum(temp_gamma_rr[w_i])
-                temp_gamma_ss[w_i] /= temp_gamma_s_sum + mini_val
-                temp_gamma_sr[w_i] /= temp_gamma_s_sum + mini_val
-                temp_gamma_rr[w_i] /= temp_gamma_r_sum + mini_val
-            self.gamma_ss[doc.doc_id] = temp_gamma_ss
-            self.gamma_sr[doc.doc_id] = temp_gamma_sr
-            self.gamma_rr[doc.doc_id] = temp_gamma_rr
-        # m step
-        # update expected terms for next iteration
-        self.exp_m, self.exp_n, self.exp_s = self.exp_suff(docs, indices)
-        self.exp_m_sum = np.sum(self.exp_m, axis=1) # sum over k, exp_m is [D K] dimensionality, exp_m_sum[d] should be N_d / C_j
-        self.exp_n_sum = np.sum(self.exp_n, axis=0)  # sum over w, exp_n is [V K] dimensionality
-        self.exp_s_sum = np.sum(self.exp_s, axis=0)  # sum over w, exp_p is [V K] dimensionality
-        # self.update_hyperparams(docs) # update hyperparameters
+    # def pred_ind(self, index_found):
+    #     pred_x = 0
+    #     pred_z = index_found % self.K # get topic k from 0 to K
+    #     if index_found < self.K:
+    #             pred_x = 1
+    #     return pred_x, pred_z
+    #
+    # def infer_ind(self, docs, indices):
+    #     infer_x = {doc.doc_id: np.zeros(len(doc.words_dict)) for doc in docs}  # D x N_d
+    #     infer_z = {doc.doc_id: np.zeros(len(doc.words_dict)) for doc in docs}  # D x N_d
+    #     for d_i, doc in zip(indices, docs):
+    #         for w_i, (word_id, freq) in enumerate(doc.words_dict.items()): # w_i is the index of word in each document
+    #             index_found = np.argmax(np.concatenate((self.gamma_ss[doc.doc_id][w_i], self.gamma_sr[doc.doc_id][w_i], self.gamma_rr[doc.doc_id][w_i])))
+    #             infer_x[doc.doc_id][w_i], infer_z[doc.doc_id][w_i] = self.pred_ind(index_found)
+    #     return infer_x, infer_z
+    #
+    # def exp_suff(self, docs, indices):
+    #     infer_x, infer_z = self.infer_ind(docs, indices)
+    #     E_m_dk = np.zeros((self.D, self.K))
+    #     E_s_wk = np.zeros((self.V, self.K))
+    #     E_n_wk = np.zeros((self.V, self.K))
+    #     for d_i, doc in zip(indices, docs):
+    #         for w_i, (word_id, freq) in enumerate(doc.words_dict.items()):  # w_i is the index of word in each document
+    #             E_m_dk[d_i] += (self.gamma_ss[doc.doc_id][w_i] + self.gamma_sr[doc.doc_id][w_i] + self.gamma_rr[doc.doc_id][w_i]) * freq/2
+    #             # E_m_dk[d_i] += (self.pi*(self.gamma_ss[doc.doc_id][w_i]) + (1-self.pi)*(self.gamma_sr[doc.doc_id][w_i]+
+    #             # self.gamma_rr[doc.doc_id][w_i]))*freq/2
+    #             if infer_x[doc.doc_id][w_i] == 1: # x_indicator is assigned as 1, seed topic
+    #                 assign_k = int(infer_z[doc.doc_id][w_i])
+    #                 E_s_wk[w_i, assign_k] += self.gamma_ss[doc.doc_id][w_i, assign_k] * freq
+    #             else: # x_indicator is 0, regular topic
+    #                 for k in range(self.K):
+    #                     E_n_wk[word_id, k] += (self.gamma_rr[doc.doc_id][w_i, k] + self.gamma_sr[doc.doc_id][w_i, k])*freq
+    #     return E_m_dk, E_n_wk, E_s_wk
+    #
+    # def CVB0_generative(self, docs, indices, times, C=None):
+    #     # E step
+    #     for d_i, doc in zip(indices, docs):
+    #         # (the number of words in a doc) x K, not use V x K to save space
+    #         temp_gamma_rr = np.zeros((len(doc.words_dict), self.K))
+    #         temp_gamma_sr = np.zeros((len(doc.words_dict), self.K))
+    #         temp_gamma_ss = np.zeros((len(doc.words_dict), self.K))  # non-seed regular word will be zero
+    #         for w_i, (word_id, freq) in enumerate(doc.words_dict.items()):  # w_i is the index of word in each document
+    #             # word_id represents the index of word in vocabulary
+    #             for k in range(self.K):  # update gamma_dik
+    #                 if word_id in self.topic_seeds_dict[k]:  # seed word, could be regular topic or seed topic
+    #                     # update seed topic
+    #                     temp_gamma_ss[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.mu + self.exp_s[word_id, k]) \
+    #                                             / (self.mu_sum[k] + self.exp_s_sum[k]) * self.pi[k]
+    #                     # update regular topic
+    #                     temp_gamma_sr[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.beta + self.exp_n[word_id, k]) \
+    #                                             / (self.beta_sum + self.exp_n_sum[k]) * (1 - self.pi[k])
+    #                 else:  # regular word, must be regular topic
+    #                     temp_gamma_rr[w_i][k] = (self.exp_m[d_i][k] + self.alpha[doc.t_d][k]) * (self.beta + self.exp_n[word_id, k])\
+    #                                             / (self.beta_sum + self.exp_n_sum[k])
+    #                     # temp_gamma_rr[w_i][k] *= (self.pi[k] + self.exp_n_sum[k] + self.beta_sum) / (
+    #                     #             2 * self.pi[k] + self.exp_n_sum[k] + self.beta_sum + self.exp_s_sum[k] + self.mu_sum[k])
+    #             # normalization
+    #             temp_gamma_s_sum = np.sum(temp_gamma_ss[w_i]) + np.sum(temp_gamma_sr[w_i])
+    #             temp_gamma_r_sum = np.sum(temp_gamma_rr[w_i])
+    #             temp_gamma_ss[w_i] /= temp_gamma_s_sum + mini_val
+    #             temp_gamma_sr[w_i] /= temp_gamma_s_sum + mini_val
+    #             temp_gamma_rr[w_i] /= temp_gamma_r_sum + mini_val
+    #         self.gamma_ss[doc.doc_id] = temp_gamma_ss
+    #         self.gamma_sr[doc.doc_id] = temp_gamma_sr
+    #         self.gamma_rr[doc.doc_id] = temp_gamma_rr
+    #     # m step
+    #     # update expected terms for next iteration
+    #     self.exp_m, self.exp_n, self.exp_s = self.exp_suff(docs, indices)
+    #     self.exp_m_sum = np.sum(self.exp_m, axis=1) # sum over k, exp_m is [D K] dimensionality, exp_m_sum[d] should be N_d / C_j
+    #     self.exp_n_sum = np.sum(self.exp_n, axis=0)  # sum over w, exp_n is [V K] dimensionality
+    #     self.exp_s_sum = np.sum(self.exp_s, axis=0)  # sum over w, exp_p is [V K] dimensionality
+    #     self.update_hyperparams(docs) # update hyperparameters
 
     def update_hyperparams(self, gamma_sr_sum):
         '''
@@ -354,7 +348,6 @@ class GDTM(nn.Module):
                 self.alpha = self.alpha_softplus_act() # alpha is T x K
                 with torch.no_grad():
                     self.SCVB0(batch_BOW, batch_indices, batch_times, batch_C, epoch * batch_n + i)
-                    # self.CVB0_generative(batch_docs, batch_indices, batch_times)
                 kl_z = self.get_kl_z(batch_indices, batch_times)
                 loss = kl_eta + kl_z
                 print(kl_eta, kl_z)
@@ -363,10 +356,9 @@ class GDTM(nn.Module):
                     torch.nn.utils.clip_grad_norm_(self.parameters(), self.clip)
                 self.optimizer.step()
                 loss *= self.C/batch_C
-                print("\t took %s seconds for epoch %s" % (time.time() - start_time, epoch))
+                print("took %s seconds for minibatch %s" % (time.time() - start_time, epoch))
                 elbo.append(loss.detach().cpu().numpy().item())
-                print(elbo)
-                print("epoch %s: elbo %s, diff %s "% (epoch, elbo[-1], np.abs(elbo[-1] - elbo[-2])))
+                print("epoch: %s, minibatch %s, elbo: %s, elbo diff: %s" % (epoch, i, elbo[-1], np.abs(elbo[-1] - elbo[-2])))
                 self.exp_q_z = 0 # update to zero for next epoch
             self.save_parameters(epoch)
 

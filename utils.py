@@ -111,7 +111,7 @@ def tokenize_phecode_icd_corpus(icd_in_corpus):
     seeds_topic_matrix = torch.zeros(V, K, dtype=torch.int)
     for k, w_l in tokenized_phecode_icd.items():
         for w in w_l:
-            seeds_topic_matrix[w, k] = 1 # todo: every time is different, random tokenization? we should only do one tokenizationa at corpus.py
+            seeds_topic_matrix[w, k] = 1
     # print(seeds_topic_matrix.sum()) # 7718 as 7718 words are seed words across topics
     torch.save(seeds_topic_matrix, "./phecode_mapping/seed_topic_matrix.pt")
     return mapped_phecode, mapped_icd, tokenized_phecode_icd

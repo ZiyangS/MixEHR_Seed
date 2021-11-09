@@ -198,9 +198,6 @@ class Corpus(Dataset):
         '''
         corpus_file = os.path.join(path, "corpus.pkl")
         corpus = pickle.load(open(corpus_file, "rb"))
-        # print(corpus.D)
-        # import time
-        # time.sleep(200)
         return corpus
 
     @staticmethod

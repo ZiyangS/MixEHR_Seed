@@ -21,7 +21,7 @@ def run(args):
     # cmd = args.cmd
     corpus = Corpus.read_corpus_from_directory(args.corpus)
     seeds_topic_matrix = torch.load("./phecode_mapping/seed_topic_matrix.pt", map_location=device) # get seed word-topic mapping, V x K matrix
-    # print(seeds_topic_matrix.sum()) # 7718 as 7718 words are seed words across topics
+    print(seeds_topic_matrix.sum()) # 7718 as 7718 words are seed words across topics
     gdtm = GDTM(corpus, seeds_topic_matrix, args.batch_size, args.output)
     gdtm = gdtm.to(device)
     logger.info('''
