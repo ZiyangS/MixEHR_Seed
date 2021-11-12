@@ -8,7 +8,7 @@ import sys
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import argparse
-from utils import tokenize_phecode_icd_corpus
+from utils import *
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -119,7 +119,7 @@ class Corpus(Dataset):
         print(data)
         print(labels)
         C = data.freq.to_numpy().sum() # number of words of a corpus
-        phecode_ids, vocab_ids, tokenized_phecode_icd = tokenize_phecode_icd_corpus(list(data.icd.unique()))
+        phecode_ids, vocab_ids, tokenized_phecode_icd = tokenize_all_phecode_icd_corpus(list(data.icd.unique()))
         # phecode_ids: key is phecode, value is the mapped index of phecode from 1 to K-1, K is 1569
         # vocab_ids: key is icd, value is the mapped index of icd from 1 to V-1, V is 8539
         # tokenized_phecode_icd is dict {mapped phecode: [mapped ICD codes]}, len(key) is 1569, len(values) is 5741, other are regular words
@@ -244,8 +244,8 @@ def run(args):
     print(STORE_FOLDER)
 
     if cmd == 'process':
-        path = os.path.join(BASE_FOLDER, 'document_part_data.csv')
-        labels = os.path.join(BASE_FOLDER, 'label_part_data.csv')
+        path = os.path.join(BASE_FOLDER, 'document_full_data.csv')
+        labels = os.path.join(BASE_FOLDER, 'label_full_data.csv')
         Corpus.build_from_GDTM_fileformat(path, labels, STORE_FOLDER)
 
     elif cmd == 'split':
@@ -255,4 +255,5 @@ def run(args):
 
 if __name__ == '__main__':
     # run(parser.parse_args(['process', '-n', '150', './data/', './test_store/']))
-    run(parser.parse_args(['split', 'store/test/', 'store/']))
+    # run(parser.parse_args(['split', 'store/test/', 'store/']))
+    run(parser.parse_args(['process', '-n', '150', './data/', './store/']))
