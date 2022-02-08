@@ -17,7 +17,7 @@ The proababilistic graphical model of MixEHR-S is shown:
 
 # Relevant Publications
 
-This published code is referenced from the submitted paper on the ICML-2020 conference: Automatic Phenotyping by a Seed-guided Topic Model
+This published code is referenced from the submitted paper: Automatic Phenotyping by a Seed-guided Topic Model
 
 
 # Dataset
