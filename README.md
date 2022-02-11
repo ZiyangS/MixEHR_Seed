@@ -14,9 +14,6 @@ To learn our model, we devise a hybrid Bayesian inference algorithm in a stochas
 We also infer the age-dependent topic hyperparameters by an amortized inference using a LSTM network. 
 
 
-The proababilistic graphical model of MixEHR-S is shown:
-
-<img src="https://drive.google.com/file/d/1MQ7W6sS4Q_tlD5aNyngFGjATMPH0osR2/view?usp=sharing" width="500" height="350">
 
 
 # Relevant Publications
