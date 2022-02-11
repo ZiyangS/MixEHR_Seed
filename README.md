@@ -1,3 +1,7 @@
+***Note:The author of KG-ETM submitted a wrong Anoymous link. They are sorry for the mistake. To KG-ETM please go https://anonymous.4open.science/r/Knowledge_graph-ETM-FD6F/README.md.
+
+
+
 # MixEHR-Seed
 
 
