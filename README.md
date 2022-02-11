@@ -16,7 +16,7 @@ We also infer the age-dependent topic hyperparameters by an amortized inference 
 
 The proababilistic graphical model of MixEHR-S is shown:
 
-<img src="https://github.com/ZiyangS/MixEHR_Seed/blob/main/figures/PGM.jpg" width="500" height="350">
+<img src="https://drive.google.com/file/d/1MQ7W6sS4Q_tlD5aNyngFGjATMPH0osR2/view?usp=sharing" width="500" height="350">
 
 
 # Relevant Publications
