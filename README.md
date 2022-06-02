@@ -1,9 +1,4 @@
-***Note:The author of KG-ETM submitted a wrong Anoymous link. They are sorry for the mistake. To KG-ETM please go https://anonymous.4open.science/r/Knowledge_graph-ETM-FD6F/README.md.
-
-
-
 # MixEHR-Seed
-
 
 MixEHR-Seed is a seed-guided Bayesian topic model that can fit large-scale longitundinal heterogeneous EHR data and thousands of phenotypes. 
 In the seed-guidance, each topic is represented as two distributions: (1)thea seed-topic distribution over only the seed words;
@@ -14,11 +9,14 @@ To learn our model, we devise a hybrid Bayesian inference algorithm in a stochas
 We also infer the age-dependent topic hyperparameters by an amortized inference using a LSTM network. 
 
 
-
-
 # Relevant Publications
 
-This published code is referenced from the submitted paper: Automatic Phenotyping by a Seed-guided Topic Model
+This published code is referenced from: 
+Ziyang Song, Yuanyi Hu, Aman Verma, David Buckeridge, and Yue Li. 2022.
+Automatic Phenotyping by a Seed-guided Topic Model. In Proceedings of the
+28th ACM SIGKDD Conference On Knowledge Discovery and Data Mining,
+August 14–18, 2022, Washington, DC. ACM, New York, NY, USA, 12 pages.
+https://doi.org/10.1145/1122445.1122456
 
 
 # Dataset
