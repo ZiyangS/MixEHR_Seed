@@ -1,10 +1,10 @@
 import logging
 import argparse
 import torch
-from GDTM import GDTM
+from MixEHR_Seed import MixEHR_Seed
 from corpus import Corpus
 
-logger = logging.getLogger("GDTM training processing")
+logger = logging.getLogger("MixEHR-Seed training processing")
 parser = argparse.ArgumentParser()
 # default arguments
 parser.add_argument('corpus', help='Path to read corpus file', default='./store/')
@@ -19,12 +19,12 @@ print(device)
 def run(args):
     # print(args)
     # cmd = args.cmd
-    seeds_topic_matrix = torch.load("./phecode_mapping/all_seed_topic_matrix.pt", map_location=device) # get seed word-topic mapping, V x K matrix
-    print(seeds_topic_matrix.sum()) # 7718 as 7718 words are seed words across topics
-    print(seeds_topic_matrix.shape)
+    seeds_topic_matrix = torch.load("./phecode_mapping/seed_topic_matrix.pt", map_location=device) # get seed word-topic mapping, V x K matrix
+    print(seeds_topic_matrix.shape) # torch.Size([6807, 1502])
+    print(seeds_topic_matrix.sum()) # 7081, as some ICD codes belong to multiple phecodes
     corpus = Corpus.read_corpus_from_directory(args.corpus)
-    gdtm = GDTM(corpus, seeds_topic_matrix, args.batch_size, args.output)
-    gdtm = gdtm.to(device)
+    model = MixEHR_Seed(corpus, seeds_topic_matrix, modality_num=2, guided_modality=0, batch_size=args.batch_size, out=args.output)
+    model = model.to(device)
     logger.info('''
     #     ======= Parameters =======
     #     mode: \t\ttraining
@@ -35,7 +35,8 @@ def run(args):
     #     save every:\t\t%s
     #     ==========================
     # ''' % (args.corpus, args.output, args.max_epoch, args.batch_size, args.save_every))
-    gdtm.inference_SCVB_SGD(max_epoch=args.max_epoch, save_every=args.save_every)
+    elbo = model.inference_SCVB_SGD(max_epoch=args.max_epoch, save_every=args.save_every)
+    print("epoch : %s" % (elbo))
 
 if __name__ == '__main__':
-    run(parser.parse_args(['./test_store/', './result/']))
+    run(parser.parse_args(['./store/train/', './result/']))
